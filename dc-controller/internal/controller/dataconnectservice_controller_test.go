@@ -274,7 +274,7 @@ var _ = Describe("DataConnectService Controller", func() {
 
 			deploy := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: np + nameRestService, Namespace: targetNamespace}, deploy)).To(Succeed())
-			Expect(deploy.Labels).To(HaveKeyWithValue("dataconnecthub.opendatahub.io/managed-by", "dataconnectservice"))
+			Expect(deploy.Labels).To(HaveKeyWithValue(managedByLabel, managedByDCHService))
 		})
 	})
 

@@ -78,6 +78,9 @@ const (
 
 	finalizerName = "dataconnecthub.opendatahub.io/finalizer"
 
+	managedByLabel      = "dataconnecthub.opendatahub.io/managed-by"
+	managedByDCHService = "dataconnectservice"
+
 	releasePlatform = "platform"
 )
 
@@ -533,7 +536,7 @@ func (r *DataConnectServiceReconciler) deleteClusterScopedResources(ctx context.
 	log := logf.FromContext(ctx)
 
 	var clusterRoles rbacv1.ClusterRoleList
-	if err := r.List(ctx, &clusterRoles, client.MatchingLabels{"dataconnecthub.opendatahub.io/managed-by": "dataconnectservice"}); err != nil {
+	if err := r.List(ctx, &clusterRoles, client.MatchingLabels{managedByLabel: managedByDCHService}); err != nil {
 		log.Error(err, "Failed to list DCH ClusterRoles for cleanup")
 	} else {
 		for i := range clusterRoles.Items {
@@ -547,7 +550,7 @@ func (r *DataConnectServiceReconciler) deleteClusterScopedResources(ctx context.
 	}
 
 	var clusterRoleBindings rbacv1.ClusterRoleBindingList
-	if err := r.List(ctx, &clusterRoleBindings, client.MatchingLabels{"dataconnecthub.opendatahub.io/managed-by": "dataconnectservice"}); err != nil {
+	if err := r.List(ctx, &clusterRoleBindings, client.MatchingLabels{managedByLabel: managedByDCHService}); err != nil {
 		log.Error(err, "Failed to list DCH ClusterRoleBindings for cleanup")
 	} else {
 		for i := range clusterRoleBindings.Items {
@@ -693,7 +696,7 @@ func (r *DataConnectServiceReconciler) pendingDeployments(ctx context.Context, n
 	deployList := &appsv1.DeploymentList{}
 	if err := r.List(ctx, deployList,
 		client.InNamespace(namespace),
-		client.MatchingLabels{"dataconnecthub.opendatahub.io/managed-by": "dataconnectservice"},
+		client.MatchingLabels{managedByLabel: managedByDCHService},
 	); err != nil {
 		return nil, fmt.Errorf("listing managed deployments: %w", err)
 	}
@@ -753,7 +756,7 @@ func (r *DataConnectServiceReconciler) SetupWithManager(mgr ctrl.Manager) error 
 			handler.EnqueueRequestsFromMapFunc(r.platformConfigToReconcile),
 			builder.WithPredicates(isPlatformConfig),
 		).
-		Named("dataconnectservice").
+		Named(managedByDCHService).
 		Complete(r)
 }
 
