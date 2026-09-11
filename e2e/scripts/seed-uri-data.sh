@@ -14,6 +14,7 @@ set -euo pipefail
 
 NAMESPACE=""
 APP_NAME="e2e-uri-server"
+URI_SERVER_IMAGE="${DCH_URI_SERVER_IMAGE:-docker.io/library/nginx:alpine}"
 
 usage() {
     echo "Usage: $0 -n <namespace>"
@@ -50,12 +51,15 @@ kubectl create configmap "${APP_NAME}-data" \
 
 kubectl create configmap "${APP_NAME}-nginx" \
     -n "$NAMESPACE" \
-    --from-literal='default.conf=server {
-    listen 8080;
-    root /data;
-    default_type application/json;
-    location /api/ { try_files $uri =404; }
-    location /health { return 200 "{\"status\":\"ok\"}"; }
+    --from-literal='nginx.conf=events {}
+http {
+    server {
+        listen 8080;
+        root /data;
+        default_type application/json;
+        location /api/ { try_files $uri =404; }
+        location /health { return 200 "{\"status\":\"ok\"}"; }
+    }
 }' \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
@@ -117,8 +121,10 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: docker.io/library/nginx:alpine
+          image: ${URI_SERVER_IMAGE}
           imagePullPolicy: IfNotPresent
+          command: ["/usr/sbin/nginx"]
+          args: ["-g", "daemon off;"]
           ports:
             - containerPort: 8080
           volumeMounts:
@@ -126,7 +132,8 @@ spec:
               mountPath: /data/api
               readOnly: true
             - name: nginx-conf
-              mountPath: /etc/nginx/conf.d
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
               readOnly: true
 ${OCP_VOLUME_MOUNTS}
 ${OCP_SECURITY_CONTEXT}

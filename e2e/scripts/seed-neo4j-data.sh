@@ -16,6 +16,7 @@ set -euo pipefail
 
 NEO4J_URI=""
 NAMESPACE=""
+NEO4J_SEED_IMAGE="${DCH_NEO4J_SEED_IMAGE:-neo4j:5-community}"
 ADMIN_PASS=""
 READONLY_USER="dch_reader"
 READONLY_PASS=""
@@ -67,7 +68,7 @@ CYPHER
 
 kubectl delete pod "$POD_NAME" -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
 kubectl run "$POD_NAME" -n "$NAMESPACE" \
-    --image="neo4j:5-community" \
+    --image="$NEO4J_SEED_IMAGE" \
     --image-pull-policy=IfNotPresent \
     --restart=Never \
     --env="NEO4J_URI=${NEO4J_URI}" \
