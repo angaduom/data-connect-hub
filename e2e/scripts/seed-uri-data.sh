@@ -13,6 +13,9 @@ NAMESPACE=""
 RELEASE="e2e-uri-server"
 IMAGE="docker.io/library/nginx:alpine@sha256:72ba65eb42c10344912a84ff42408db7d34f2feb642204570ab8fc5ffd29f1d3"
 TIMEOUT="60s"
+NGINX_CONFIG_DIR="/etc/nginx/conf.d"
+NGINX_COMMAND=""
+NGINX_ARGS=""
 
 usage() {
     cat <<USAGE
@@ -37,6 +40,17 @@ while getopts "n:r:i:t:h" opt; do
         *) usage >&2; exit 1 ;;
     esac
 done
+
+if [[ "$IMAGE" == registry.redhat.io/ubi9/nginx-126@* ]]; then
+    NGINX_CONFIG_DIR="/opt/app-root/etc/nginx.d"
+    NGINX_COMMAND='          command:
+            - nginx'
+    NGINX_ARGS='          args:
+            - "-g"
+            - "daemon off;"'
+fi
+
+RESTARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 [[ -n "$NAMESPACE" ]] || { usage >&2; exit 1; }
 command -v kubectl >/dev/null || { echo "error: kubectl not found" >&2; exit 1; }
@@ -175,11 +189,15 @@ spec:
     metadata:
       labels:
         app: $RELEASE
+      annotations:
+        kubectl.kubernetes.io/restartedAt: "$RESTARTED_AT"
     spec:
       containers:
         - name: nginx
           image: $IMAGE
           imagePullPolicy: IfNotPresent
+$NGINX_COMMAND
+$NGINX_ARGS
           ports:
             - containerPort: 8443
 $OCP_SECURITY_CONTEXT
@@ -188,7 +206,7 @@ $OCP_SECURITY_CONTEXT
               mountPath: /data/api
               readOnly: true
             - name: nginx-conf
-              mountPath: /etc/nginx/conf.d
+              mountPath: $NGINX_CONFIG_DIR
               readOnly: true
             - name: tls
               mountPath: /etc/nginx/tls
@@ -229,7 +247,6 @@ spec:
       protocol: TCP
 EOF
 
-kubectl rollout restart deployment/"$RELEASE" -n "$NAMESPACE" >/dev/null
 kubectl rollout status deployment/"$RELEASE" -n "$NAMESPACE" --timeout="$TIMEOUT"
 
 echo "URI HTTPS test server deployed at https://$RELEASE.$NAMESPACE.svc:8443"

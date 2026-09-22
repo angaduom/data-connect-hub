@@ -335,7 +335,8 @@ setup_uri_server_and_secret() {
     [[ "$DCH_TENANT_URI_DEPLOY_SERVER" == "true" ]] || return 0
 
     bash "$SCRIPT_DIR/scripts/seed-uri-data.sh" \
-        -n "$DCH_TENANT_ID" -r "$URI_SERVER_NAME"
+        -n "$DCH_TENANT_ID" -r "$URI_SERVER_NAME" \
+        -i "${DCH_URI_SERVER_IMAGE:-docker.io/library/nginx:alpine}"
 
     local uri_ca_cert
     uri_ca_cert=$(mktemp)
