@@ -1,0 +1,103 @@
+name: Python SDK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sdk/python/**'
+  pull_request:
+    paths:
+      - 'sdk/python/**'
+
+concurrency:
+  group: python-sdk-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # setuptools-scm derives the version from tags, so the editable install
+          # needs the full history and all tags.
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('sdk/python/pyproject.toml') }}
+
+      - name: Install dependencies
+        run: make sdk-install
+
+      - name: Lint
+        run: make sdk-lint
+
+      - name: Typecheck
+        run: make sdk-typecheck
+
+      - name: Test
+        run: make sdk-test
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: sdk/python/htmlcov/
+          retention-days: 14
+
+  package:
+    name: Package (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A shallow clone has no tags and a commit distance of 1, so
+          # setuptools-scm would build a version that is never published.
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package tools
+        run: python -m pip install --upgrade build twine
+
+      - name: Build and validate distribution
+        run: make sdk-package-check VIRTUAL_ENV=1
+
+      - name: Install and smoke-test core wheel
+        run: |
+          python -m venv .sdk-core-wheel-venv
+          source .sdk-core-wheel-venv/bin/activate
+          wheel="$(realpath sdk/python/dist/*.whl)"
+          python -m pip install "$wheel"
+          python -c "import data_connect_hub; from importlib.metadata import version; assert data_connect_hub.__version__ == version('data-connect-hub'); print(f'Installed SDK version: {data_connect_hub.__version__}'); client = data_connect_hub.DataConnectClient('example.com'); client.close()"
+
+      - name: Install and smoke-test Flight wheel
+        run: |
+          python -m venv .sdk-flight-wheel-venv
+          source .sdk-flight-wheel-venv/bin/activate
+          wheel="$(realpath sdk/python/dist/*.whl)"
+          python -m pip install "${wheel}[flight]"
+          python -c "import data_connect_hub; from importlib.metadata import version; assert data_connect_hub.__version__ == version('data-connect-hub'); print(f'Installed SDK version: {data_connect_hub.__version__}'); client = data_connect_hub.DataConnectClient('example.com'); client._require_flight(); client.close()"

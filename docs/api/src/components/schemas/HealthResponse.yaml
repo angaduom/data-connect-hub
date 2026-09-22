@@ -1,0 +1,7 @@
+type: object
+required: [service]
+properties:
+  service:
+    type: string
+    description: If the endpoint is called, the string 'Data Connect Hub' is returned.
+    example: Data Connect Hub

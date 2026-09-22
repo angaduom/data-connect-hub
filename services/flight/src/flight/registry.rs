@@ -1,0 +1,32 @@
+use commons::api::connector::FlightConnector;
+use commons::api::errors::ConnectorError;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+#[derive(Default)]
+pub struct ConnectorsRegistry {
+    pub connectors: HashMap<String, Arc<dyn FlightConnector>>,
+}
+
+impl ConnectorsRegistry {
+    pub fn new() -> Self {
+        Self {
+            connectors: HashMap::new(),
+        }
+    }
+    pub fn with_connector(mut self, connector: Arc<dyn FlightConnector>) -> Self {
+        self.connectors.insert(connector.provider(), connector);
+        self
+    }
+
+    pub fn get_connector(&self, provider: &str) -> Result<&Arc<dyn FlightConnector>, ConnectorError> {
+        self.connectors.get(provider).ok_or(ConnectorError::ConfigError(format!(
+            "no connector registered for provider '{}'",
+            provider
+        )))
+    }
+
+    pub fn get_supported_connectors(&self) -> Vec<Arc<dyn FlightConnector>> {
+        self.connectors.values().cloned().collect()
+    }
+}

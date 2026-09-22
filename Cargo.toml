@@ -1,10 +1,17 @@
 [workspace]
 members = [
-    "commons",
-    "flight-service",
-    "pg-meta-store",
-    "postgres-connector",
-    "rest-service",
+    "libs/commons",
+    "libs/kube-utils",
+    "libs/pg-meta-store",
+    "connectors/postgres",
+    "connectors/sqlite",
+    "connectors/s3",
+    "connectors/milvus",
+    "connectors/elasticsearch",
+    "connectors/neo4j",
+    "connectors/uri",
+    "services/flight",
+    "services/rest",
 ]
 resolver = "2"
 
@@ -15,21 +22,30 @@ version = "0.1.0"
 unsafe_code = "deny"
 
 [workspace.dependencies]
-commons = { path = "commons" }
-postgres-connector = { path = "postgres-connector" }
-pg-meta-store = { path = "pg-meta-store" }
+commons = { path = "libs/commons" }
+postgres-connector = { path = "connectors/postgres" }
+sqlite-connector = { path = "connectors/sqlite" }
+s3-connector = { path = "connectors/s3" }
+milvus-connector = { path = "connectors/milvus" }
+elasticsearch-connector = { path = "connectors/elasticsearch" }
+neo4j-connector = { path = "connectors/neo4j" }
+uri-connector = { path = "connectors/uri" }
+neo4rs = "0.8"
+kube-utils = { path = "libs/kube-utils" }
+pg-meta-store = { path = "libs/pg-meta-store" }
+flight-service = { path = "services/flight", default-features = false }
 arrow = "59.1.0"
 arrow-flight = { version = "59.1.0", features = ["flight-sql"] }
 tonic = "0.14"
+tonic-health = "0.14"
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal"] }
 tokio-stream = "0.1"
 futures = "0.3"
 prost = "0.14"
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
-log = "0.4"
-env_logger = "0.11"
-test-log = { version = "0.2", features = ["trace"] }
+tempfile = "3.27"
+json-patch = "4"
 actix-web = "4.14.0"
 actix-cors = "0.6"
 thiserror = "2.0"
@@ -37,9 +53,33 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 clap = { version = "4.6", features = ["derive"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "sqlite", "chrono", "uuid", "json", "bigdecimal", "tls-rustls"] }
+bigdecimal = "0.4"
 async-trait = "0.1"
 async-stream = "0.3"
 bytes = "1.0"
 config = "0.15"
+kube = { version = "3.1.0", features = ["client", "runtime"] }
+k8s-openapi = { version = "0.27.0", features = ["latest"] }
 moka = "0.12"
+sha2 = "0.10"
+tower = "0.5"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+opendal = { version = "0.58", features = ["services-s3"] }
+opendal-http-transport-reqwest = { version = "0.58", default-features = false, features = ["rustls"] }
+# OpenDAL 0.58's reqwest transport uses reqwest 0.13.
+reqwest-opendal = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls", "stream"] }
+parquet = { version = "59.1", default-features = false, features = ["arrow", "async", "snap", "zstd", "lz4"] }
+arrow-csv = "59.1"
+arrow-json = "59.1"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+mime = "0.3"
+url = "2.5"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }

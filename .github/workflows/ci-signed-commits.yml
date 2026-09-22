@@ -2,12 +2,16 @@ name: Check Signed Commits
 
 on:
   pull_request:
-    branches:
-      - main
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: signed-commits-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   signed-commits:
     name: Check commit signatures
+    if: github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
     permissions:
       contents: read

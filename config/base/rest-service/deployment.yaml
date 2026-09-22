@@ -1,0 +1,136 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rest-service
+  labels:
+    app.kubernetes.io/name: rest-service
+    app.kubernetes.io/part-of: data-connect-hub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rest-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rest-service
+        app.kubernetes.io/part-of: data-connect-hub
+    spec:
+      serviceAccountName: rest-service-sa
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kube-rbac-proxy
+          image: RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
+          args:
+            - --secure-listen-address=0.0.0.0:8443
+            - --upstream=http://127.0.0.1:8080
+            - --config-file=/etc/kube-rbac-proxy/config-file.yaml
+            - --ignore-paths=/health
+            - --tls-cert-file=/etc/tls/private/tls.crt
+            - --tls-private-key-file=/etc/tls/private/tls.key
+            - --logtostderr=true
+          ports:
+            - name: https
+              containerPort: 8443
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: kube-rbac-proxy-config
+              mountPath: /etc/kube-rbac-proxy
+            - name: proxy-tls
+              mountPath: /etc/tls/private
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 15
+        - name: rest-service
+          image: RELATED_IMAGE_ODH_DATA_CONNECT_HUB_REST_IMAGE
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          args:
+            - --config
+            - /config/config.toml
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: RUST_LOG
+              value: info
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: db-secret
+              mountPath: /secrets
+              readOnly: true
+            - name: flight-ca
+              mountPath: /etc/tls/flight
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap:
+            name: rest-service-config
+        - name: kube-rbac-proxy-config
+          configMap:
+            name: rest-service-kube-rbac-proxy-config
+        - name: proxy-tls
+          secret:
+            secretName: rest-service-tls
+        - name: db-secret
+          secret:
+            secretName: dch-database-config
+        - name: flight-ca
+          configMap:
+            name: flight-service-ca
+            items:
+              - key: service-ca.crt
+                path: ca.crt

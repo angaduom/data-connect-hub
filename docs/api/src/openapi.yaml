@@ -1,0 +1,564 @@
+openapi: 3.0.3
+info:
+  title: Data Connect Hub REST API
+  description: |
+    REST API for managing data connections and connection types.
+
+    ## Authentication
+
+    All endpoints except `/health` require a bearer token. All endpoints
+    except `/health` and `/audit/data-connection-types` additionally require
+    the `x-tenant-id` header.
+
+    A missing or invalid token returns `401`, and a token that lacks
+    permission for the requested operation returns `403`. A missing or empty
+    `x-tenant-id` header is a request validation failure and returns `400`,
+    not `401`; a well-formed header naming a tenant you cannot access
+    returns `403`.
+
+    ### 1. Obtain a token
+
+    For your own user:
+
+    ```console
+    export user_token=$(oc whoami -t)
+    ```
+
+    For a ServiceAccount, bind the audience the service expects:
+
+    ```console
+    export user_token=$(oc create token <sa-name> -n <namespace> \
+      --audience="$(oc get authentication cluster -o jsonpath='{.spec.serviceAccountIssuer}')" \
+      --duration=1h)
+    ```
+
+    The token audience must match the `DataConnectService` CR's configured
+    `spec.tokenReviewAudiences`; a mismatch returns `401 unauthenticated`.
+    The list is empty by default, in which case the cluster API server's
+    own audience applies.
+
+    ### 2. Send the request
+
+    ```console
+    export TENANT_NAMESPACE=dch-example
+
+    curl -H "Authorization: Bearer $user_token" \
+         -H "x-tenant-id: $TENANT_NAMESPACE" \
+         https://dch-rest-dch-services.apps.example.com/api/v1alpha1/data/connections
+    ```
+  version: 0.1.0
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: /api/v1alpha1/data
+
+security:
+  - tenantHeader: []
+    bearerAuth: []
+
+paths:
+  /health:
+    servers:
+      - url: /
+    get:
+      operationId: health
+      summary: Health check
+      description: Application readiness probe. Note this endpoint is directly under the root path, i.e. `/health`, not under `/api`.
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "components/schemas/HealthResponse.yaml"
+
+  /connections:
+    get:
+      operationId: listConnections
+      summary: List connections
+      description: >
+        Returns all connections accessible to the tenant identified by
+        `x-tenant-id`. The response is a `DataConnectionResourceList`.
+      tags: [connections]
+      responses:
+        "200":
+          description: List of connection resources for the tenant
+          content:
+            application/json:
+              schema:
+                $ref: "components/schemas/DataConnectionResourceList.yaml"
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "503":
+          $ref: "components/responses/ServiceUnavailable.yaml"
+    post:
+      operationId: createConnection
+      summary: Create a connection
+      tags: [connections]
+      description: >
+        Creates a connection that binds a connection type to credentials and
+        connector-specific properties. The referenced connection type must
+        already exist. Use `/test/credentials` to validate credentials
+        before creating a connection.
+
+        Returns `400` with `credentials_check_failed` when inline
+        credentials do not satisfy the connection type schema. For inline
+        credentials, a missing connection type returns `404`; for a
+        `credentials_ref`, it returns `422`.
+
+        Accepts two payload variants (untagged union):
+        use `credentials_ref` to reference an existing secret,
+        or `credentials` to supply inline credentials (the server
+        creates the secret automatically).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "components/schemas/DataConnection.yaml"
+                - $ref: "components/schemas/DataConnectionWithCreds.yaml"
+      responses:
+        "201":
+          description: Full connection resource with metadata, spec, and status
+          content:
+            application/json:
+              schema:
+                $ref: "components/schemas/DataConnectionResource.yaml"
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "404":
+          $ref: "components/responses/NotFound.yaml"
+        "409":
+          $ref: "components/responses/Conflict.yaml"
+        "422":
+          $ref: "components/responses/UnprocessableEntity.yaml"
+        "503":
+          $ref: "components/responses/ServiceUnavailable.yaml"
+
+  /connections/{id}:
+    parameters:
+      - $ref: "#/components/parameters/connectionId"
+    get:
+      operationId: getConnection
+      summary: Get a connection
+      description: >
+        Returns the full connection resource, including `metadata`,
+        `resource`, and `status`.
+      tags: [connections]
+      responses:
+        "200":
+          description: Full connection resource with metadata, spec, and status
+          content:
+            application/json:
+              schema:
+                $ref: "components/schemas/DataConnectionResource.yaml"
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "404":
+          $ref: "components/responses/NotFound.yaml"
+    patch:
+      operationId: patchConnection
+      summary: Update a connection
+      description: >
+        Partially updates a connection using JSON Merge Patch (RFC 7396).
+        Supply only the fields you want to change; omitted fields are left unchanged.
+        To change the credentials secret reference, patch `credentials_ref`.
+        Inline `credentials` in the patch body are silently ignored.
+      tags: [connections]
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              $ref: "components/schemas/DataConnectionMergePatch.yaml"
+      responses:
+        "200":
+          description: Full connection resource with metadata, spec, and status
+          content:
+            application/json:
+              schema:
+                $ref: "components/schemas/DataConnectionResource.yaml"
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "404":
+          $ref: "components/responses/NotFound.yaml"
+        "409":
+          $ref: "components/responses/Conflict.yaml"
+        "422":
+          $ref: "components/responses/UnprocessableEntity.yaml"
+    delete:
+      operationId: deleteConnection
+      summary: Delete a connection
+      description: >
+        Permanently deletes the connection. The credentials secret referenced
+        by the connection is not deleted.
+      tags: [connections]
+      responses:
+        "204":
+          description: Connection deleted
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "404":
+          $ref: "components/responses/NotFound.yaml"
+
+  /connections/{id}/exports/secrets/{secret_name}:
+    parameters:
+      - $ref: "#/components/parameters/connectionId"
+      - name: secret_name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Name of the Kubernetes secret to create or overwrite
+    put:
+      operationId: exportConnection
+      summary: Export a connection to a Kubernetes secret
+      description: >
+        Flattens the connection metadata, properties, and credentials into
+        a single Kubernetes secret with dot-notation keys
+        (e.g. `data_connection.name`, `data_connection.properties.host`).
+        If the secret already exists it is overwritten.
+      tags: [connections]
+      responses:
+        "204":
+          description: Secret created or updated
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "404":
+          $ref: "components/responses/NotFound.yaml"
+
+  /connections/{id}/readiness:
+    parameters:
+      - $ref: "#/components/parameters/connectionId"
+    post:
+      operationId: checkConnectionReadiness
+      summary: Check connection readiness
+      description: >
+        Validates that the connection's credentials secret exists,
+        matches the connection type schema, and that the data source
+        is reachable. Updates the connection status accordingly.
+
+        When a credentials secret cannot be read, fails schema validation,
+        or the data-source check fails, the connection `status` is updated
+        before the error is returned. A missing connection returns `502`
+        without a status update. Returns `400` with `invalid_secret` or
+        `credentials_check_failed` when the secret is missing or does
+        not match the connection type schema. Returns `502` with
+        `connection_check_failed` when the connection is not found or
+        the data source check fails. Returns `500` with
+        `status_update_failed` when the service cannot persist an
+        updated connection status.
+      tags: [connections]
+      responses:
+        "204":
+          description: Connection is ready
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "500":
+          $ref: "components/responses/InternalServerError.yaml"
+        "502":
+          $ref: "components/responses/BadGateway.yaml"
+
+  /connections/{id}/binary:
+    parameters:
+      - $ref: "#/components/parameters/connectionId"
+    get:
+      operationId: downloadBinary
+      summary: Download binary data from a connection
+      description: >
+        Streams binary data (files, objects) from a data connection.
+        The `path` query parameter is connector-specific (for example, an
+        object key or a relative URL path). Only connectors that support
+        binary reads will return data; unsupported connectors respond
+        with `501`.
+      tags: [connections]
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: File path or object key to download
+          example: models/model.bin
+      responses:
+        "200":
+          description: Binary data stream
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+              example: "UEsDBBQAAAAIAmuAAY4AAAACAAADAAAAYPIakvJrKrp5sQ0AiUtzUEgU0zE10y8uzStOASUmqTcEKkxUAAAsAQAA"
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: Suggests a filename for the download
+              example: 'attachment; filename="model.bin"'
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "404":
+          $ref: "components/responses/NotFound.yaml"
+        "501":
+          $ref: "components/responses/NotImplemented.yaml"
+        "503":
+          $ref: "components/responses/ServiceUnavailable.yaml"
+
+  /test/credentials:
+    post:
+      operationId: testCredentials
+      summary: Test credentials against a data source
+      description: >
+        Tests the provided credentials by attempting to connect to
+        the data source without creating any resources. You can use `/test/credentials` to test the credentials first. Once the test is successful, you can use `/connections` to create a connection.
+      tags: [test]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "components/schemas/TestCredentials.yaml"
+      responses:
+        "204":
+          description: Credentials are valid
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "422":
+          $ref: "components/responses/UnprocessableEntity.yaml"
+
+  /connection-types:
+    get:
+      operationId: listConnectionTypes
+      summary: List connection types
+      description: >
+        Returns all connection types that are accessible to the tenant.
+        This includes global connection types created by the operator
+        and any custom connection types created by the tenant.
+      tags: [connection-types]
+      responses:
+        "200":
+          description: Connection type list
+          content:
+            application/json:
+              schema:
+                $ref: "components/schemas/DataConnectionTypeResourceList.yaml"
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "503":
+          $ref: "components/responses/ServiceUnavailable.yaml"
+    post:
+      operationId: createConnectionType
+      summary: Create a connection type
+      description: >
+        Default connection types are created by the Data Connect Hub operator. You can also create connection types.
+        Connection types created by a tenant are only accessible by that tenant.
+      tags: [connection-types]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "components/schemas/DataConnectionType.yaml"
+      responses:
+        "201":
+          description: Connection type created
+          content:
+            application/json:
+              schema:
+                $ref: "components/schemas/DataConnectionTypeResource.yaml"
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "503":
+          $ref: "components/responses/ServiceUnavailable.yaml"
+
+  /connection-types/{id}:
+    parameters:
+      - $ref: "#/components/parameters/resourceId"
+    get:
+      operationId: getConnectionType
+      summary: Get a connection type
+      tags: [connection-types]
+      responses:
+        "200":
+          description: Connection type details
+          content:
+            application/json:
+              schema:
+                $ref: "components/schemas/DataConnectionTypeResource.yaml"
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "404":
+          $ref: "components/responses/NotFound.yaml"
+    patch:
+      operationId: patchConnectionType
+      summary: Update a connection type
+      description: >
+        Partially updates a connection type using JSON Merge Patch (RFC 7396).
+        Supply only the fields you want to change; omitted fields are left unchanged.
+      tags: [connection-types]
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              $ref: "components/schemas/DataConnectionTypeMergePatch.yaml"
+      responses:
+        "200":
+          description: Connection type updated
+          content:
+            application/json:
+              schema:
+                $ref: "components/schemas/DataConnectionTypeResource.yaml"
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "404":
+          $ref: "components/responses/NotFound.yaml"
+    delete:
+      operationId: deleteConnectionType
+      summary: Delete a connection type
+      tags: [connection-types]
+      responses:
+        "204":
+          description: Connection type deleted
+        "400":
+          $ref: "components/responses/BadRequest.yaml"
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "404":
+          $ref: "components/responses/NotFound.yaml"
+
+  /audit/data-connection-types:
+    servers:
+      - url: /api/v1alpha1
+    post:
+      operationId: auditConnectionTypes
+      summary: Audit all connection types
+      description: >
+        Queries the Flight service for supported connectors and updates
+        the status of all connection types accordingly.
+        This endpoint does not require the x-tenant-id header.
+      x-internal: true
+      tags: [connection-types]
+      security:
+        - bearerAuth: []
+      responses:
+        "202":
+          description: Audit started
+        "401":
+          $ref: "components/responses/Unauthorized.yaml"
+        "403":
+          $ref: "components/responses/Forbidden.yaml"
+        "503":
+          $ref: "components/responses/ServiceUnavailable.yaml"
+
+components:
+  securitySchemes:
+    tenantHeader:
+      type: apiKey
+      in: header
+      name: x-tenant-id
+      description: Tenant identifier. Required on all endpoints except /health.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        OpenShift or Kubernetes bearer token. See
+        [Authentication](#section/Authentication) for how to obtain one.
+
+  parameters:
+    resourceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Resource unique identifier
+    connectionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Unique identifier of the connection
+
+tags:
+  - name: connections
+    description: >
+      A `connection` binds a connection type to credentials stored in a
+      Kubernetes secret and connector-specific `properties`. Connections are
+      tenant-scoped and require the `x-tenant-id` header.
+
+      On create, supply credentials via `credentials_ref` (reference an
+      existing secret) or `credentials` (the server creates the secret).
+      On patch, use `credentials_ref` to point at a different secret;
+      inline `credentials` in the patch body are silently ignored.
+
+      The `status.state` field reflects live connection health. Call
+      `/connections/{id}/readiness` to refresh it.
+  - name: connection-types
+    description: >
+     A `connection type` defines a schema for a data `connection`.
+     A connection type must be created before creating a connection of that type.
+     Connection types are typically created by the Data Connect Hub operator, but you can also create your own custom connection types.
+     Connection types created by the operator are known as `global` connection types and are accessible by all tenants.
+     Connection types created by a tenant are only accessible by that tenant.
+  - name: test
+    description: Test operations

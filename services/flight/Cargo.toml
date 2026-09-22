@@ -1,0 +1,70 @@
+[package]
+name = "flight-service"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[lib]
+name = "flight_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "flight-service"
+path = "src/main.rs"
+
+[features]
+default = ["postgres", "sqlite", "s3", "milvus", "elasticsearch", "neo4j", "uri"]
+postgres = ["dep:postgres-connector"]
+sqlite = ["dep:sqlite-connector"]
+s3 = ["dep:s3-connector"]
+milvus = ["dep:milvus-connector"]
+elasticsearch = ["dep:elasticsearch-connector"]
+neo4j = ["dep:neo4j-connector"]
+uri = ["dep:uri-connector"]
+
+[dependencies]
+postgres-connector = { workspace = true, optional = true }
+sqlite-connector = { workspace = true, optional = true }
+s3-connector = { workspace = true, optional = true }
+milvus-connector = { workspace = true, optional = true }
+elasticsearch-connector = { workspace = true, optional = true }
+neo4j-connector = { workspace = true, optional = true }
+uri-connector = { workspace = true, optional = true }
+async-trait = { workspace = true }
+commons = { workspace = true }
+pg-meta-store = { workspace = true }
+arrow = { workspace = true }
+arrow-flight = { workspace = true, features = ["flight-sql"] }
+tonic = { workspace = true, features = ["tls-aws-lc"] }
+tonic-health = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "fs", "signal"] }
+futures = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+tokio-stream = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+config = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+kube-utils = { workspace = true }
+tower = { workspace = true }
+rustls = { workspace = true }
+http = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+actix-web = { workspace = true }
+uuid = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+
+[dev-dependencies]
+sqlx = { workspace = true }
+opendal = { workspace = true }
+parquet = { workspace = true }
+arrow-csv = { workspace = true }

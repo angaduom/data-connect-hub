@@ -1,0 +1,38 @@
+[package]
+name = "rest-service"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+actix-web = { workspace = true }
+actix-cors = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+arrow = { workspace = true }
+arrow-flight = { workspace = true, features = ["flight-sql"] }
+futures = { workspace = true }
+prost = { workspace = true }
+commons = { workspace = true }
+pg-meta-store = { workspace = true }
+tonic = { workspace = true, features = ["tls-aws-lc"] }
+rustls = { workspace = true }
+config = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+json-patch = { workspace = true }
+kube-utils = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+chrono = { workspace = true }
+
+
+[dev-dependencies]
+actix-rt = "2"
+async-trait = { workspace = true }

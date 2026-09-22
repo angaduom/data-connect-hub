@@ -1,0 +1,251 @@
+use actix_web::web::{JsonConfig, PathConfig, QueryConfig};
+use actix_web::{HttpResponse, ResponseError, http::StatusCode};
+use commons::api::errors::SecretStoreError;
+use commons::api::errors::{ConnectorError, MetaStoreError};
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use thiserror::Error;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RestErrorResponse {
+    pub code: String,
+    pub message: String,
+    #[serde(skip)]
+    pub status: u16,
+}
+
+#[derive(Error, Debug)]
+pub enum EndpointError {
+    #[error("Path not found")]
+    PathNotFound,
+    #[error("Header not found: {0}")]
+    HeaderNotFound(String),
+    #[error("Invalid header value: {0}")]
+    InvalidHeaderValue(String),
+}
+
+#[allow(unused)]
+#[derive(Error, Debug)]
+pub enum ValidationError {
+    #[error("Deserialization error: {0}")]
+    DeserializationError(String),
+    #[error("Invalid tenant ID")]
+    InvalidTenantId,
+    #[error("Invalid data connection type")]
+    InvalidDataConnectionType,
+    #[error("Invalid secret")]
+    InvalidSecret,
+    #[error("{0}")]
+    UnsupportedProvider(String),
+    #[error("Flight service error: {0}")]
+    FlightServiceError(String),
+    #[error("Missing field: {0}")]
+    MissingField(String),
+    #[error("Connection check failed: {0}")]
+    ConnectionCheckFailed(String),
+    #[error("Credentials check failed: {0}")]
+    CredentialsCheckFailed(String),
+    #[error("Status update failed: {0}")]
+    StatusUpdateFailed(String),
+}
+
+impl fmt::Display for RestErrorResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl ResponseError for RestErrorResponse {
+    fn status_code(&self) -> StatusCode {
+        StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    fn error_response(&self) -> HttpResponse {
+        HttpResponse::build(self.status_code()).json(self)
+    }
+}
+
+impl From<ConnectorError> for RestErrorResponse {
+    fn from(err: ConnectorError) -> Self {
+        let (code, status) = match &err {
+            ConnectorError::InvalidRequest(_) => ("invalid_request", 400),
+            ConnectorError::NoDataError => ("no_data", 404),
+            ConnectorError::ConfigError(_) => ("config", 500),
+            ConnectorError::ConnectionError(_) => ("connection", 503),
+            ConnectorError::SQLError(_) => ("sql_error", 400),
+            ConnectorError::IOError(_) => ("io_error", 500),
+            ConnectorError::NotFound(_) => ("not_found", 404),
+            ConnectorError::UnsupportedOperation(_) => ("unsupported_operation", 501),
+        };
+        let message = match &err {
+            ConnectorError::IOError(_) => {
+                tracing::error!("{err}");
+                "data source I/O error".to_string()
+            },
+            _ => err.message().to_string(),
+        };
+        RestErrorResponse {
+            code: code.to_string(),
+            message,
+            status,
+        }
+    }
+}
+
+impl From<MetaStoreError> for RestErrorResponse {
+    fn from(err: MetaStoreError) -> Self {
+        let (code, status) = match &err {
+            MetaStoreError::ResourceNotFound(_) => ("not_found", 404),
+            MetaStoreError::InvalidRequest(_) => ("invalid_request", 400),
+            MetaStoreError::Config(_) => ("config", 500),
+            MetaStoreError::Connection(_) => ("connection", 503),
+            MetaStoreError::Query(_) => ("query_error", 500),
+            MetaStoreError::Conflict(_) => ("conflict", 409),
+            MetaStoreError::Serialization(_) => ("serialization", 400),
+            MetaStoreError::Deserialization(_) => ("deserialization", 400),
+            MetaStoreError::Validation(_) => ("validation", 400),
+            MetaStoreError::UnprocessableEntity(_) => ("unprocessable_entity", 422),
+        };
+        RestErrorResponse {
+            code: code.to_string(),
+            message: err.to_string(),
+            status,
+        }
+    }
+}
+
+impl From<SecretStoreError> for RestErrorResponse {
+    fn from(err: SecretStoreError) -> Self {
+        let (code, status) = match &err {
+            SecretStoreError::SecretNotFound(_) => ("secret_not_found", 404),
+            SecretStoreError::Forbidden(_) => ("forbidden", 403),
+            SecretStoreError::CannotCreateSecret(_) => ("cannot_create_secret", 400),
+            SecretStoreError::CannotDeleteSecret(_) => ("cannot_delete_secret", 400),
+            SecretStoreError::CannotSetSecretLabels(_) => ("cannot_set_secret_labels", 400),
+        };
+        RestErrorResponse {
+            code: code.to_string(),
+            message: err.to_string(),
+            status,
+        }
+    }
+}
+
+impl From<tonic::Status> for RestErrorResponse {
+    fn from(status: tonic::Status) -> Self {
+        let (code, http_status) = match status.code() {
+            tonic::Code::InvalidArgument => ("invalid_request", 400),
+            tonic::Code::Unauthenticated => ("unauthenticated", 401),
+            tonic::Code::PermissionDenied => ("forbidden", 403),
+            tonic::Code::NotFound => ("not_found", 404),
+            tonic::Code::Unavailable => ("connection", 503),
+            tonic::Code::Unimplemented => ("unsupported_operation", 501),
+            _ => ("flight_service_error", 500),
+        };
+        RestErrorResponse {
+            code: code.to_string(),
+            message: status.message().to_string(),
+            status: http_status,
+        }
+    }
+}
+
+fn extraction_error(code: &str, err: actix_web::Error) -> actix_web::Error {
+    RestErrorResponse {
+        code: code.to_string(),
+        message: err.to_string(),
+        status: 400,
+    }
+    .into()
+}
+
+pub fn json_config() -> JsonConfig {
+    JsonConfig::default().error_handler(|err, _req| extraction_error("invalid_json", err.into()))
+}
+
+pub fn query_config() -> QueryConfig {
+    QueryConfig::default().error_handler(|err, _req| extraction_error("invalid_query", err.into()))
+}
+
+pub fn path_config() -> PathConfig {
+    PathConfig::default().error_handler(|err, _req| extraction_error("invalid_path", err.into()))
+}
+
+impl From<EndpointError> for RestErrorResponse {
+    fn from(err: EndpointError) -> Self {
+        match err {
+            EndpointError::PathNotFound => RestErrorResponse {
+                code: "path_not_found".to_string(),
+                message: "Path not found".to_string(),
+                status: 404,
+            },
+            EndpointError::HeaderNotFound(header) => RestErrorResponse {
+                code: "header_not_found".to_string(),
+                message: format!("Header '{}' not found", header),
+                status: 400,
+            },
+            EndpointError::InvalidHeaderValue(header) => RestErrorResponse {
+                code: "invalid_header_value".to_string(),
+                message: format!("Header '{}' has an invalid value", header),
+                status: 400,
+            },
+        }
+    }
+}
+
+impl From<ValidationError> for RestErrorResponse {
+    fn from(err: ValidationError) -> Self {
+        match err {
+            ValidationError::DeserializationError(error) => RestErrorResponse {
+                code: "deserialization_error".to_string(),
+                message: error,
+                status: 400,
+            },
+            ValidationError::InvalidTenantId => RestErrorResponse {
+                code: "invalid_tenant_id".to_string(),
+                message: "Invalid tenant ID".to_string(),
+                status: 400,
+            },
+            ValidationError::InvalidDataConnectionType => RestErrorResponse {
+                code: "invalid_data_connection_type".to_string(),
+                message: "Invalid data connection type".to_string(),
+                status: 400,
+            },
+            ValidationError::InvalidSecret => RestErrorResponse {
+                code: "invalid_secret".to_string(),
+                message: "Invalid secret".to_string(),
+                status: 400,
+            },
+            ValidationError::FlightServiceError(error) => RestErrorResponse {
+                code: "flight_service_error".to_string(),
+                message: error,
+                status: 500,
+            },
+            ValidationError::ConnectionCheckFailed(error) => RestErrorResponse {
+                code: "connection_check_failed".to_string(),
+                message: error,
+                status: 502,
+            },
+            ValidationError::UnsupportedProvider(error) => RestErrorResponse {
+                code: "unsupported_provider".to_string(),
+                message: error,
+                status: 400,
+            },
+            ValidationError::MissingField(field) => RestErrorResponse {
+                code: "missing_field".to_string(),
+                message: format!("Missing field: {}", field),
+                status: 400,
+            },
+            ValidationError::CredentialsCheckFailed(error) => RestErrorResponse {
+                code: "credentials_check_failed".to_string(),
+                message: error,
+                status: 400,
+            },
+            ValidationError::StatusUpdateFailed(error) => RestErrorResponse {
+                code: "status_update_failed".to_string(),
+                message: error,
+                status: 500,
+            },
+        }
+    }
+}

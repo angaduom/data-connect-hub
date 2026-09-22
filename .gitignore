@@ -1,5 +1,12 @@
+# OS files
+.DS_Store
+Thumbs.db
+
 # Cargo build output
 target/
+
+#local dev
+.local/
 
 # Rustfmt backup files
 **/*.rs.bk
@@ -29,7 +36,29 @@ coverage.json
 .claude/*
 !.claude/CLAUDE.md
 
+# E2E test env (contains tokens) and build artifacts
+e2e/.env
+e2e/env.local
+e2e/.venv/
+e2e/*.egg-info/
+
+# Python SDK build artifacts
+sdk/python/dist/
+sdk/python/src/*.egg-info/
+sdk/python/.coverage
+sdk/python/htmlcov/
+
 # Docs are markdown only
 docs/**/
 !docs/
 !docs/proposals/
+!docs/user-guide/
+!docs/user-guide/**
+!docs/dev-guide/
+!docs/dev-guide/**
+!docs/api/
+!docs/api/**
+
+# Generated Postgres credentials (run config/db/postgres/generate-secrets.sh)
+config/db/postgres/postgres-credentials.env
+config/db/postgres/secret-config.toml

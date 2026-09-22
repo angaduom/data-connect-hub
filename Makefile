@@ -20,6 +20,9 @@ endif
 	require-container-engine \
 	container-flight container-rest container-all \
 	container-run-flight container-run-rest \
+	oc-setup-flight oc-setup-rest oc-setup-all \
+	oc-build-flight oc-build-rest oc-build-all \
+	sdk-install sdk-test sdk-lint sdk-fmt sdk-typecheck sdk-build sdk-package-check sdk-all \
 	setup-hooks help
 
 # -------------------------------------------------------------------
@@ -54,22 +57,49 @@ ifndef CONTAINER_ENGINE
 endif
 
 container-flight: | require-container-engine
-	"$(CONTAINER_ENGINE)" build -t "$(IMAGE)-flight:$(VERSION)" -f flight-service/Containerfile .
+	"$(CONTAINER_ENGINE)" build -t "$(IMAGE)-flight:$(VERSION)" -f services/flight/Containerfile .
 
 container-rest: | require-container-engine
-	"$(CONTAINER_ENGINE)" build -t "$(IMAGE)-rest:$(VERSION)" -f rest-service/Containerfile .
+	"$(CONTAINER_ENGINE)" build -t "$(IMAGE)-rest:$(VERSION)" -f services/rest/Containerfile .
 
 container-all: container-flight container-rest
 
 container-run-flight: | require-container-engine
 	"$(CONTAINER_ENGINE)" run --rm --network=host \
-		-v "$(CURDIR)/flight-service/samples/config.toml:/config/config.toml:ro" \
+		-v "$(CURDIR)/.local/flight-config.toml:/config/config.toml:ro" \
 		"$(IMAGE)-flight:$(VERSION)" 2>&1
 
 container-run-rest: | require-container-engine
 	"$(CONTAINER_ENGINE)" run --rm --network=host \
-		-v "$(CURDIR)/rest-service/samples/config.toml:/config/config.toml:ro" \
+		-v "$(CURDIR)/.local/rest-config.toml:/config/config.toml:ro" \
 		"$(IMAGE)-rest:$(VERSION)" 2>&1
+
+# -------------------------------------------------------------------
+# OpenShift Builds
+# -------------------------------------------------------------------
+
+OC_NAMESPACE          ?= default
+OC_EXCLUDE_SERVICES   ?= (^|/)(\.git|target|dc-controller|docs|\.local|\.claude|\.github)(/|$$)
+OC_EXCLUDE_CONTROLLER ?= (^|/)(\.git|target|libs|connectors|services|docs|\.local|\.claude|\.github)(/|$$)
+export OC_NAMESPACE OC_EXCLUDE_SERVICES OC_EXCLUDE_CONTROLLER
+
+oc-setup-flight:
+	oc apply -k .local/openshift-build/flight-service -n "$${OC_NAMESPACE}"
+
+oc-setup-rest:
+	oc apply -k .local/openshift-build/rest-service -n "$${OC_NAMESPACE}"
+
+oc-setup-all: oc-setup-flight oc-setup-rest
+
+oc-build-flight:
+	oc start-build flight-service-ubi9 --from-dir=. --follow -n "$${OC_NAMESPACE}" \
+		--exclude="$${OC_EXCLUDE_SERVICES}"
+
+oc-build-rest:
+	oc start-build rest-service-ubi9 --from-dir=. --follow -n "$${OC_NAMESPACE}" \
+		--exclude="$${OC_EXCLUDE_SERVICES}"
+
+oc-build-all: oc-build-flight oc-build-rest
 
 # -------------------------------------------------------------------
 # Test
@@ -81,6 +111,8 @@ test:
 test-unit:
 	cargo test -p commons $(_NOCAPTURE)
 	cargo test -p postgres-connector $(_NOCAPTURE)
+	cargo test -p sqlite-connector $(_NOCAPTURE)
+	cargo test -p kube-utils $(_NOCAPTURE)
 	cargo test -p pg-meta-store $(_NOCAPTURE)
 	cargo test -p rest-service $(_NOCAPTURE)
 
@@ -105,16 +137,112 @@ audit:
 	cargo audit
 
 check-dco:
-	@bash scripts/check-dco.sh
+	@bash hack/check-dco.sh
+
+# -------------------------------------------------------------------
+# Python SDK
+# -------------------------------------------------------------------
+
+PYTHON_SDK_DIR := sdk/python
+
+ifdef VIRTUAL_ENV
+  SDK_PYTHON       := python3
+  SDK_BIN          :=
+  SDK_VENV_PREREQ  :=
+else
+  SDK_PYTHON       := $(PYTHON_SDK_DIR)/.venv/bin/python3
+  SDK_BIN          := .venv/bin/
+  SDK_VENV_PREREQ  := $(SDK_PYTHON)
+endif
+
+$(PYTHON_SDK_DIR)/.venv/bin/python3:
+	python3 -m venv $(PYTHON_SDK_DIR)/.venv
+
+sdk-venv: $(SDK_VENV_PREREQ)
+
+sdk-install: sdk-venv
+	$(SDK_PYTHON) -m pip install -e "$(PYTHON_SDK_DIR)[flight,dev]"
+
+sdk-test: sdk-venv
+	cd $(PYTHON_SDK_DIR) && $(SDK_BIN)pytest tests/ -v --cov=data_connect_hub --cov-report=term-missing --cov-report=html:htmlcov
+
+sdk-lint: sdk-venv
+	cd $(PYTHON_SDK_DIR) && $(SDK_BIN)ruff check src/ tests/ examples/*.py
+	cd $(PYTHON_SDK_DIR) && $(SDK_BIN)ruff format --check src/ tests/ examples/*.py
+
+sdk-fmt: sdk-venv
+	cd $(PYTHON_SDK_DIR) && $(SDK_BIN)ruff format src/ tests/ examples/*.py
+	cd $(PYTHON_SDK_DIR) && $(SDK_BIN)ruff check --fix src/ tests/ examples/*.py
+
+sdk-typecheck: sdk-venv
+	cd $(PYTHON_SDK_DIR) && $(SDK_BIN)mypy src/
+
+sdk-build: sdk-venv
+	rm -rf "$(PYTHON_SDK_DIR)/dist"
+	"$(SDK_PYTHON)" -m build --outdir "$(PYTHON_SDK_DIR)/dist" "$(PYTHON_SDK_DIR)"
+
+sdk-package-check: sdk-build
+	"$(SDK_PYTHON)" -m twine check "$(PYTHON_SDK_DIR)"/dist/*
+
+sdk-all: sdk-lint sdk-typecheck sdk-test sdk-package-check
+
+# -------------------------------------------------------------------
+# OpenAPI docs
+# -------------------------------------------------------------------
+
+generate-openapi-docs:
+	@if command -v redocly >/dev/null 2>&1; then \
+		$(MAKE) _generate-openapi-docs-native; \
+	elif [ -n "$(CONTAINER_ENGINE)" ]; then \
+		$(MAKE) _generate-openapi-docs-container; \
+	else \
+		echo "redocly not found and container runtime not available."; \
+		exit 1; \
+	fi
+
+_generate-openapi-docs-native:
+	@echo "1. Bundling external spec to openapi.yaml (with x-internal removed)..."
+	redocly bundle external@latest --output docs/api/openapi.yaml --remove-unused-components
+	@echo "2. Bundling external spec to openapi.json (with x-internal removed)..."
+	redocly bundle external@latest --ext json --output docs/api/openapi.json
+	@echo "3. Bundling internal spec to openapi-internal.yaml..."
+	redocly bundle internal@latest --output docs/api/openapi-internal.yaml --remove-unused-components
+	@echo "4. Bundling internal spec to openapi-internal.json..."
+	redocly bundle internal@latest --ext json --output docs/api/openapi-internal.json
+	@echo "5. Building public HTML from external spec..."
+	redocly build-docs docs/api/openapi.json --output=docs/api/index-public.html
+	@echo "6. Building private HTML from internal spec..."
+	redocly build-docs docs/api/openapi-internal.json --output=docs/api/index-private.html
+	@echo "7. Copying public HTML to index.html..."
+	cp docs/api/index-public.html docs/api/index.html
+
+_generate-openapi-docs-container:
+	@echo "Generating OpenAPI docs using $(CONTAINER_ENGINE)..."
+	"$(CONTAINER_ENGINE)" run --rm \
+		--pull=newer \
+		-v "$$PWD:/spec:Z" \
+		--entrypoint sh \
+		docker.io/redocly/cli -c ' \
+			echo "1. Bundling external spec to openapi.yaml (with x-internal removed)..." && redocly bundle external@latest --output docs/api/openapi.yaml --remove-unused-components && \
+			echo "2. Bundling external spec to openapi.json (with x-internal removed)..." && redocly bundle external@latest --ext json --output docs/api/openapi.json && \
+			echo "3. Bundling internal spec to openapi-internal.yaml (with x-internal removed)..." && redocly bundle internal@latest --output docs/api/openapi-internal.yaml --remove-unused-components && \
+			echo "4. Bundling internal spec to openapi-internal.json (with x-internal removed)..." && redocly bundle internal@latest --ext json --output docs/api/openapi-internal.json && \
+			echo "5. Building public HTML from external spec..." && redocly build-docs docs/api/openapi.json --output=docs/api/index-public.html && \
+			echo "6. Building private HTML from internal spec..." && redocly build-docs docs/api/openapi-internal.json --output=docs/api/index-private.html && \
+			echo "7. Copying public HTML to index.html..." && cp docs/api/index-public.html docs/api/index.html \
+		'
 
 # -------------------------------------------------------------------
 # Dev Setup
 # -------------------------------------------------------------------
 
 setup-hooks:
-	@mkdir -p .hooks
-	ln -sf ../../.hooks/pre-commit .git/hooks/pre-commit
-	@echo "Git hooks installed."
+	@command -v pre-commit >/dev/null 2>&1 || { \
+		echo "pre-commit not found. Install it first (for example: pipx install pre-commit)."; \
+		exit 1; \
+	}
+	pre-commit install
+	@echo "Pre-commit hook installed."
 
 # -------------------------------------------------------------------
 # Help
@@ -135,7 +263,7 @@ help:
 	@echo ""
 	@echo "Test:"
 	@echo "  test                 run all tests"
-	@echo "  test-unit            unit tests (commons, postgres-connector, rest-service)"
+	@echo "  test-unit            unit tests (commons, connectors, kube-utils, pg-meta-store, rest-service)"
 	@echo "  test-integration     integration tests (flight-service)"
 	@echo ""
 	@echo "Quality:"
@@ -150,3 +278,21 @@ help:
 	@echo "  container-all        build all service images"
 	@echo "  container-run-flight run flight-service container (host network)"
 	@echo "  container-run-rest   run rest-service container (host network)"
+	@echo ""
+	@echo "OpenShift Builds (OC_NAMESPACE=default):"
+	@echo "  oc-setup-flight      apply flight-service BuildConfig overlay"
+	@echo "  oc-setup-rest        apply rest-service BuildConfig overlay"
+	@echo "  oc-setup-all         apply all BuildConfig overlays"
+	@echo "  oc-build-flight      start flight-service build on cluster"
+	@echo "  oc-build-rest        start rest-service build on cluster"
+	@echo "  oc-build-all         build all services on cluster"
+	@echo ""
+	@echo "Python SDK:"
+	@echo "  sdk-install          install SDK in editable mode with dev deps"
+	@echo "  sdk-test             run SDK unit tests with coverage"
+	@echo "  sdk-lint             lint and format-check SDK"
+	@echo "  sdk-fmt              format SDK code"
+	@echo "  sdk-typecheck        run mypy on SDK"
+	@echo "  sdk-build            build SDK wheel and source distribution"
+	@echo "  sdk-package-check    build and validate SDK distribution metadata"
+	@echo "  sdk-all              lint + typecheck + test + package check SDK"
