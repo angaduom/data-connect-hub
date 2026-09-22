@@ -390,6 +390,7 @@ seed_s3_data() {
         -S "$AWS_SECRET_ACCESS_KEY"
     )
     [[ -n "${AWS_S3_CA_CERT:-}" ]] && args+=(-c "$AWS_S3_CA_CERT")
+    [[ -n "${DCH_MINIO_MC_IMAGE:-}" ]] && args+=(-i "$DCH_MINIO_MC_IMAGE")
 
     PYTHON="$VENV_PYTHON" bash "$(dirname "$0")/scripts/seed-s3-data.sh" "${args[@]}"
 }
