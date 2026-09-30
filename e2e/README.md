@@ -37,6 +37,10 @@ To pass extra pytest arguments:
 ./e2e/run-e2e.sh e2e/env.local --tb=short -x
 ```
 
+The runner grants the REST ServiceAccount `get`, `create`, `patch`, and `delete` on secrets in `DCH_TENANT_ID` for inline credentials, failed-creation cleanup, readiness, and export. It also grants Flight read access to configured connector secrets. Service RBAC setup runs even when `DCH_AUTH_TOKEN` is supplied; the Kubernetes identity running the script must be allowed to create and bind these Roles.
+
+These permissions are tenant-local and are not installed by the default DCH deployment. Passing E2E tests does not establish secret access in other tenants. See [REST service secret permissions](../docs/user-guide/auth.md#rest-service-secret-permissions) for tenant setup and [troubleshooting](../docs/user-guide/auth.md#9-troubleshooting) for permission failures.
+
 ## 3. Important Files and Directories
 
 | Path | Purpose |
