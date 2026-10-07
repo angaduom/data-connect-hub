@@ -34,6 +34,7 @@ import (
 const (
 	labelODHDashboard           = "opendatahub.io/dashboard"
 	annotationConnectionTypeRef = "opendatahub.io/connection-type-ref"
+	annotationDCHConnectionID   = "dataconnecthub.opendatahub.io/connection-id"
 )
 
 // SecretWatcherReconciler watches ODH connection Secrets
@@ -68,7 +69,21 @@ func (r *SecretWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	if secret.Annotations[annotationDCHSynced] == valueSyncedTrue {
-		return ctrl.Result{}, nil
+		if secret.Annotations[annotationDCHConnectionID] != "" {
+			return ctrl.Result{}, nil
+		}
+		displayName := secret.Annotations[annotationDisplayName]
+		if displayName == "" {
+			displayName = secret.Name
+		}
+		connectionID, err := r.findConnectionID(ctx, secret.Namespace, secret.Name, displayName, "")
+		if err != nil {
+			if errors.Is(err, ErrServiceUnavailable) || errors.Is(err, ErrNotFound) {
+				return ctrl.Result{RequeueAfter: requeueOnMigrationServiceUnavailable}, nil
+			}
+			return ctrl.Result{}, err
+		}
+		return r.markSynced(ctx, &secret, connectionID)
 	}
 
 	typeRef := secret.Annotations[annotationConnectionTypeRef]
@@ -108,10 +123,18 @@ func (r *SecretWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	log.Info("migrating ODH connection", "name", conn.Name, "secretRef", secret.Name, "namespace", secret.Namespace)
 
-	if err := r.RestClient.CreateConnection(ctx, secret.Namespace, conn); err != nil {
+	created, err := r.RestClient.CreateConnection(ctx, secret.Namespace, conn)
+	if err != nil {
 		if errors.Is(err, ErrConflict) {
-			log.Info("connection already exists, marking synced", "name", conn.Name)
-			return r.markSynced(ctx, &secret)
+			connectionID, lookupErr := r.findConnectionID(ctx, secret.Namespace, secret.Name, conn.Name, typeID)
+			if lookupErr != nil {
+				if errors.Is(lookupErr, ErrServiceUnavailable) || errors.Is(lookupErr, ErrNotFound) {
+					return ctrl.Result{RequeueAfter: requeueOnMigrationServiceUnavailable}, nil
+				}
+				return ctrl.Result{}, lookupErr
+			}
+			log.Info("connection already exists, recording mapping", "name", conn.Name, "connectionID", connectionID)
+			return r.markSynced(ctx, &secret, connectionID)
 		}
 		if errors.Is(err, ErrServiceUnavailable) {
 			log.Info("REST service unavailable, requeuing", "name", conn.Name)
@@ -122,7 +145,7 @@ func (r *SecretWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	log.Info("connection migrated", "name", conn.Name)
-	return r.markSynced(ctx, &secret)
+	return r.markSynced(ctx, &secret, created.Metadata.ID)
 }
 
 func (r *SecretWatcherReconciler) resolveConnectionTypeID(ctx context.Context, namespace, typeRef string) (string, error) {
@@ -140,12 +163,34 @@ func (r *SecretWatcherReconciler) resolveConnectionTypeID(ctx context.Context, n
 	return "", fmt.Errorf("%w: connection type %q not found", ErrNotFound, typeRef)
 }
 
-func (r *SecretWatcherReconciler) markSynced(ctx context.Context, secret *corev1.Secret) (ctrl.Result, error) {
+func (r *SecretWatcherReconciler) findConnectionID(ctx context.Context, namespace, secretName, connectionName, typeID string) (string, error) {
+	connections, err := r.RestClient.ListConnections(ctx, namespace)
+	if err != nil {
+		return "", err
+	}
+
+	for _, connection := range connections {
+		if connection.Metadata.ID == "" || connection.Resource.Name != connectionName {
+			continue
+		}
+		if typeID != "" && connection.Resource.DataConnectionTypeID != typeID {
+			continue
+		}
+		if connection.Resource.CredentialsRef != nil && connection.Resource.CredentialsRef.Secret == secretName {
+			return connection.Metadata.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: connection for Secret %q not found", ErrNotFound, secretName)
+}
+
+func (r *SecretWatcherReconciler) markSynced(ctx context.Context, secret *corev1.Secret, connectionID string) (ctrl.Result, error) {
 	patch := client.MergeFrom(secret.DeepCopy())
 	if secret.Annotations == nil {
 		secret.Annotations = make(map[string]string)
 	}
 	secret.Annotations[annotationDCHSynced] = valueSyncedTrue
+	secret.Annotations[annotationDCHConnectionID] = connectionID
 	if err := r.Patch(ctx, secret, patch); err != nil {
 		logf.FromContext(ctx).Error(err, "failed to set synced annotation", "name", secret.Name)
 		return ctrl.Result{}, err
