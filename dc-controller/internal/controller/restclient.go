@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"strings"
 	"sync"
@@ -59,7 +60,7 @@ type ConnectionTypeClient interface {
 // ConnectionMigrationClient abstracts REST calls needed by the Secret migration watcher.
 type ConnectionMigrationClient interface {
 	ListConnectionTypes(ctx context.Context, tenantID string) ([]ConnectionTypeResource, error)
-	ListConnections(ctx context.Context, tenantID string) ([]ConnectionResource, error)
+	LookupConnectionIDBySecret(ctx context.Context, tenantID, secretName string) (string, error)
 	CreateConnection(ctx context.Context, tenantID string, conn Connection) (ConnectionResource, error)
 }
 
@@ -147,9 +148,8 @@ type connectionTypeListResponse struct {
 	Items      []ConnectionTypeResource `json:"items"`
 }
 
-type connectionListResponse struct {
-	TotalCount int                  `json:"total_count"`
-	Items      []ConnectionResource `json:"items"`
+type connectionLookupResponse struct {
+	ID string `json:"id"`
 }
 
 // URLResolver returns the base URL for the REST service. It is called on
@@ -342,37 +342,56 @@ func (c *httpConnectionTypeClient) ListConnectionTypes(ctx context.Context, tena
 	return listResp.Items, nil
 }
 
-func (c *httpConnectionTypeClient) ListConnections(ctx context.Context, tenantID string) ([]ConnectionResource, error) {
-	url, err := c.baseURL()
+func (c *httpConnectionTypeClient) LookupConnectionIDBySecret(ctx context.Context, tenantID, secretName string) (string, error) {
+	baseURL, err := c.baseURL()
 	if err != nil {
-		return nil, ErrServiceUnavailable
+		return "", ErrServiceUnavailable
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, restDataURL(url, connectionsResource), nil)
+	query := neturl.Values{}
+	query.Set("secret_ref", secretName)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		restDataURL(baseURL, connectionsResource)+"/lookup?"+query.Encode(),
+		nil,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+		return "", fmt.Errorf("creating request: %w", err)
 	}
 	c.setHeaders(req, tenantID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, ErrServiceUnavailable
+		return "", ErrServiceUnavailable
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
+	if readErr != nil {
+		return "", ErrServiceUnavailable
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return "", ErrNotFound
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return "", ErrConflict
+	}
 	if resp.StatusCode >= 500 {
-		return nil, ErrServiceUnavailable
+		return "", ErrServiceUnavailable
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var listResp connectionListResponse
-	if err := json.Unmarshal(body, &listResp); err != nil {
-		return nil, fmt.Errorf("decoding connections: %w", err)
+	var lookupResp connectionLookupResponse
+	if err := json.Unmarshal(body, &lookupResp); err != nil {
+		return "", ErrServiceUnavailable
 	}
-	return listResp.Items, nil
+	if lookupResp.ID == "" {
+		return "", ErrServiceUnavailable
+	}
+	return lookupResp.ID, nil
 }
 
 func (c *httpConnectionTypeClient) CreateConnection(ctx context.Context, tenantID string, conn Connection) (ConnectionResource, error) {
@@ -405,17 +424,23 @@ func (c *httpConnectionTypeClient) CreateConnection(ctx context.Context, tenantI
 		return ConnectionResource{}, ErrServiceUnavailable
 	}
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
+	if readErr != nil {
+		if resp.StatusCode == http.StatusCreated {
+			return ConnectionResource{}, ErrServiceUnavailable
+		}
+		return ConnectionResource{}, fmt.Errorf("reading response: %w", readErr)
+	}
 	if resp.StatusCode != http.StatusCreated {
 		return ConnectionResource{}, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var created ConnectionResource
 	if err := json.Unmarshal(respBody, &created); err != nil {
-		return ConnectionResource{}, fmt.Errorf("decoding created connection: %w", err)
+		return ConnectionResource{}, ErrServiceUnavailable
 	}
 	if created.Metadata.ID == "" {
-		return ConnectionResource{}, fmt.Errorf("created connection response has no ID")
+		return ConnectionResource{}, ErrServiceUnavailable
 	}
 	return created, nil
 }

@@ -31,11 +31,11 @@ import (
 const testConnectionID = "connection-uuid-123"
 
 type mockMigrationClient struct {
-	listFn            func(ctx context.Context, tenantID string) ([]ConnectionTypeResource, error)
-	listConnectionsFn func(ctx context.Context, tenantID string) ([]ConnectionResource, error)
-	createFn          func(ctx context.Context, tenantID string, conn Connection) (ConnectionResource, error)
-	listCalls         int
-	createCalls       int
+	listFn      func(ctx context.Context, tenantID string) ([]ConnectionTypeResource, error)
+	lookupFn    func(ctx context.Context, tenantID, secretName string) (string, error)
+	createFn    func(ctx context.Context, tenantID string, conn Connection) (ConnectionResource, error)
+	listCalls   int
+	createCalls int
 }
 
 func (m *mockMigrationClient) ListConnectionTypes(ctx context.Context, tenantID string) ([]ConnectionTypeResource, error) {
@@ -51,11 +51,11 @@ func (m *mockMigrationClient) ListConnectionTypes(ctx context.Context, tenantID 
 	}, nil
 }
 
-func (m *mockMigrationClient) ListConnections(ctx context.Context, tenantID string) ([]ConnectionResource, error) {
-	if m.listConnectionsFn != nil {
-		return m.listConnectionsFn(ctx, tenantID)
+func (m *mockMigrationClient) LookupConnectionIDBySecret(ctx context.Context, tenantID, secretName string) (string, error) {
+	if m.lookupFn != nil {
+		return m.lookupFn(ctx, tenantID, secretName)
 	}
-	return nil, nil
+	return "", ErrNotFound
 }
 
 func (m *mockMigrationClient) CreateConnection(ctx context.Context, tenantID string, conn Connection) (ConnectionResource, error) {
@@ -244,15 +244,8 @@ var _ = Describe("Secret Watcher Controller", func() {
 		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
 
 		mock := &mockMigrationClient{
-			listConnectionsFn: func(_ context.Context, _ string) ([]ConnectionResource, error) {
-				return []ConnectionResource{{
-					Metadata: ResourceMetadata{ID: "existing-connection-uuid"},
-					Resource: Connection{
-						Name:                 "My S3 Connection",
-						DataConnectionTypeID: "type-uuid-123",
-						CredentialsRef:       &CredentialsRef{Secret: secretName},
-					},
-				}}, nil
+			lookupFn: func(_ context.Context, _ string, _ string) (string, error) {
+				return "existing-connection-uuid", nil
 			},
 			createFn: func(_ context.Context, _ string, _ Connection) (ConnectionResource, error) {
 				return ConnectionResource{}, ErrConflict
